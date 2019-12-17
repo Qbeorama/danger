@@ -87,7 +87,7 @@ module Danger
         elsif opts.key?(:gem)
           import_dangerfile_from_gem(opts[:gem])
         else
-          raise "`import` requires a Hash with either :github, :gitlab, :gem, or :path"
+          raise "`import` requires a Hash with either :url, :github, :gitlab, :gem, or :path"
         end
       else
         raise "`import` requires a Hash"
