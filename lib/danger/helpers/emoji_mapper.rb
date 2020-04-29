@@ -8,10 +8,10 @@ module Danger
         "white_check_mark" => "✅"
       },
       "bitbucket_server" => {
-        "no_entry_sign"    => "❌",
+        "no_entry_sign"    => "\u274C",
         "warning"          => "⚠️",
-        "book"             => "🔮",
-        "white_check_mark" => "✅"
+        "book"             => "\u2728",
+        "white_check_mark" => "\u2705"
       }
     }.freeze
 
