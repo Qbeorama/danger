@@ -88,6 +88,7 @@ module Danger
         # which includes inline code violations found by Danger as Annotations.
         # If no inline violations occurred, an empty, successful (green) report will be sent.
         if @code_insights.ready?
+          puts("Attempting to send Code Insights report.")
           inline_violations = inline_violations_group(warnings: warnings, errors: errors, messages: messages)
           inline_warnings = inline_violations[:warnings] || []
           inline_errors = inline_violations[:errors] || []
@@ -103,6 +104,7 @@ module Danger
         # If we're sending inline comments separately via Code Insights,
         # the main body comment should contain only generic, non-file specific messages.
         if @code_insights.ready?
+          puts("Filtering violations.")
           main_violations = main_violations_group(warnings: warnings, errors: errors, messages: messages)
           warnings = main_violations[:warnings] || []
           errors = main_violations[:errors] || []
