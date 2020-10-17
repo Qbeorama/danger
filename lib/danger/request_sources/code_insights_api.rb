@@ -2,23 +2,39 @@
 
 module Danger
   module RequestSources
+    #
+    # Provides ability for Danger to interact with Atlassian's Code Insights API in order to provide code quality
+    # reports along with inline comments for specific lines in specific files.
+    #  See https://developer.atlassian.com/server/bitbucket/how-tos/code-insights/ for more details.
+    #
+    # Currently this functionality is implemented only for Bitbucket Server request source.
     class CodeInsightsAPI
-      attr_accessor :report_title, :report_description, :logo_url, :username, :password, :host
+      attr_accessor :report_title, :report_description, :report_key, :logo_url, :username, :password, :host
 
       def initialize(project, slug, environment)
-        @report_title = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_TITLE"]
-        @report_key = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_KEY"]
-        @report_description = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_DESCRIPTION"]
-        @logo_url = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_LOGO_URL"]
-        @username = environment["DANGER_BITBUCKETSERVER_USERNAME"]
-        @password = environment["DANGER_BITBUCKETSERVER_PASSWORD"]
-        @host = environment["DANGER_BITBUCKETSERVER_HOST"]
+        @report_title = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_TITLE"] || ""
+        @report_key = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_KEY"] || ""
+        @report_description = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_DESCRIPTION"] || ""
+        @logo_url = environment["DANGER_BITBUCKETSERVER_CODE_INSIGHTS_REPORT_LOGO_URL"] || ""
+        @username = environment["DANGER_BITBUCKETSERVER_USERNAME"] || ""
+        @password = environment["DANGER_BITBUCKETSERVER_PASSWORD"] || ""
+        @host = environment["DANGER_BITBUCKETSERVER_HOST"] || ""
         @project = project
         @slug = slug
       end
 
+      def inspect
+        inspected = super
+
+        if @password
+          inspected = inspected.sub! @password, "********".freeze
+        end
+
+        inspected
+      end
+
       def ready?
-        !(@report_title.empty? || @report_description.empty? || @username.empty? || @password.empty? || @host.empty?)
+        !(@report_title.empty? || @report_description.empty? || @username.empty? || @password.empty? || @host.empty? || report_key.empty?)
       end
 
       def delete_report(commit)

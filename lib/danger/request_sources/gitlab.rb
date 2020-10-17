@@ -8,7 +8,7 @@ module Danger
   module RequestSources
     class GitLab < RequestSource
       include Danger::Helpers::CommentsHelper
-      attr_accessor :mr_json, :commits_json
+      attr_accessor :mr_json, :commits_json, :dismiss_out_of_range_messages
 
       FIRST_GITLAB_GEM_WITH_VERSION_CHECK = Gem::Version.new("4.6.0")
       FIRST_VERSION_WITH_INLINE_COMMENTS = Gem::Version.new("10.8.0")
@@ -24,6 +24,7 @@ module Danger
       def initialize(ci_source, environment)
         self.ci_source = ci_source
         self.environment = environment
+        self.dismiss_out_of_range_messages = false
 
         @token = @environment["DANGER_GITLAB_API_TOKEN"]
       end
@@ -36,9 +37,13 @@ module Danger
         require "gitlab"
 
         @client ||= Gitlab.client(endpoint: endpoint, private_token: token)
-      rescue LoadError
-        puts "The GitLab gem was not installed, you will need to change your Gem from `danger` to `danger-gitlab`.".red
-        puts "\n - See https://github.com/danger/danger/blob/master/CHANGELOG.md#400"
+      rescue LoadError => e
+        if e.path == "gitlab"
+          puts "The GitLab gem was not installed, you will need to change your Gem from `danger` to `danger-gitlab`.".red
+          puts "\n - See https://github.com/danger/danger/blob/master/CHANGELOG.md#400"
+        else
+          puts "Error: #{e}".red
+        end
         abort
       end
 
@@ -46,7 +51,11 @@ module Danger
         includes_port = self.host.include? ":"
         raise "Port number included in `DANGER_GITLAB_HOST`, this will fail with GitLab CI Runners" if includes_port
 
-        super
+        # We don't call super because in some cases the Git remote doesn't match the GitLab instance host.
+        # In Danger::EnvironmentManager#initialize we still check that the request source is #validates_as_api_source?
+        # so that should be sufficient to validate GitLab as request source.
+        # See https://github.com/danger/danger/issues/1231 and https://gitlab.com/gitlab-com/gl-infra/infrastructure/-/issues/10069.
+        true
       end
 
       def validates_as_api_source?
@@ -122,11 +131,11 @@ module Danger
       end
 
       def setup_danger_branches
+        # we can use a GitLab specific feature here:
         base_branch = self.mr_json.source_branch
+        base_commit = self.mr_json.diff_refs.base_sha
         head_branch = self.mr_json.target_branch
-        head_commit = self.scm.head_commit
-
-        raise "Are you running `danger local/pr` against the correct repository? Also this can happen if you run danger on MR without changes" if base_commit == head_commit
+        head_commit = self.mr_json.diff_refs.head_sha
 
         # Next, we want to ensure that we have a version of the current branch at a known location
         scm.ensure_commitish_exists_on_branch! base_branch, base_commit
@@ -200,7 +209,7 @@ module Danger
         rest_inline_violations = submit_inline_comments!({
           danger_id: danger_id,
           previous_violations: previous_violations
-        }.merge(inline_violations))
+        }.merge(**inline_violations))
 
         main_violations = merge_violations(
           regular_violations, rest_inline_violations
@@ -219,7 +228,7 @@ module Danger
             template: "gitlab",
             danger_id: danger_id,
             previous_violations: previous_violations
-          }.merge(main_violations))
+          }.merge(**main_violations))
 
           comment_result =
             if should_create_new_comment
@@ -294,10 +303,23 @@ module Danger
         nil # TODO: Implement this
       end
 
+      def dismiss_out_of_range_messages_for(kind)
+        if self.dismiss_out_of_range_messages.kind_of?(Hash) && self.dismiss_out_of_range_messages[kind]
+          self.dismiss_out_of_range_messages[kind]
+        elsif self.dismiss_out_of_range_messages == true
+          self.dismiss_out_of_range_messages
+        else
+          false
+        end
+      end
+
       # @return [String] A URL to the specific file, ready to be downloaded
       def file_url(organisation: nil, repository: nil, branch: nil, path: nil)
         branch ||= 'master'
         token = @environment["DANGER_GITLAB_API_TOKEN"]
+        # According to GitLab Repositories API docs path and id(slug) should be encoded.
+        path = URI.encode_www_form_component(path)
+        repository = URI.encode_www_form_component(repository)
         "#{endpoint}/projects/#{repository}/repository/files/#{path}/raw?ref=#{branch}&private_token=#{token}"
       end
 
@@ -386,10 +408,9 @@ module Danger
 
         messages.reject do |m|
           next false unless m.file && m.line
-
-          # Keep the change it's in a file changed in this diff
-          next if !mr_changed_paths.include?(m.file)
-
+          # Reject if it's out of range and in dismiss mode
+          next true if dismiss_out_of_range_messages_for(kind) && is_out_of_range(mr_changes.changes, m)
+          
           # Once we know we're gonna submit it, we format it
           if is_markdown_content
             body = generate_inline_markdown_body(m, danger_id: danger_id, template: "gitlab")
@@ -462,7 +483,6 @@ module Danger
         range_header_regexp = /@@ -(?<old>[0-9]+)(,([0-9]+))? \+(?<new>[0-9]+)(,([0-9]+))? @@.*/
 
         change = changes.find { |c| c["new_path"] == message.file }
-
         # If there is no changes or rename only or deleted, return nil.
         return nil if change.nil? || change["diff"].empty? || change["deleted_file"]
 
@@ -509,7 +529,41 @@ module Danger
           line: current_old_line - current_new_line + message.line.to_i
         }
       end
+
+      def is_out_of_range(changes, message)
+        change = changes.find { |c| c["new_path"] == message.file }  
+        # If there is no changes or rename only or deleted, return out of range.
+        return true if change.nil? || change["diff"].empty? || change["deleted_file"]
+        
+        # If new file then return in range
+        return false if change["new_file"]
+
+        addition_lines = generate_addition_lines(change["diff"])
+        return false if addition_lines.include?(message.line.to_i)
+
+        return true
+      end
+
+      def generate_addition_lines(diff) 
+        range_header_regexp = /@@ -(?<old>[0-9]+)(,([0-9]+))? \+(?<new>[0-9]+)(,([0-9]+))? @@.*/
+        addition_lines = []
+        line_number = 0
+        diff.each_line do |line|
+          if line.match range_header_regexp
+            line = line.split('+').last
+            line = line.split(' ').first
+            range_string = line.split(',')
+            line_number = range_string[0].to_i - 1
+          elsif line.start_with?('+')
+            addition_lines.push(line_number)
+          elsif line.start_with?('-')
+            line_number=line_number-1
+          end
+          line_number=line_number+1
+        end
+        addition_lines
+      end
+
     end
   end
 end
-

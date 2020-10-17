@@ -40,6 +40,10 @@ module Danger
         end
       end
 
+      def validates_as_ci?
+        true
+      end
+
       def validates_as_api_source?
         (@token && !@token.empty?) || self.environment["DANGER_USE_LOCAL_GIT"]
       end
@@ -170,7 +174,7 @@ module Danger
         rest_inline_violations = submit_inline_comments!({
           danger_id: danger_id,
           previous_violations: previous_violations
-        }.merge(inline_violations))
+        }.merge(**inline_violations))
 
         main_violations = merge_violations(
           regular_violations, rest_inline_violations
@@ -189,7 +193,7 @@ module Danger
             template: "github",
             danger_id: danger_id,
             previous_violations: previous_violations
-          }.merge(main_violations))
+          }.merge(**main_violations))
 
           comment_result =
             if should_create_new_comment
